@@ -38,6 +38,9 @@ import pathlib
 
 DATA_DIR= '../../data/'  
 
+def isotimelabel():
+    return datetime.datetime.now().isoformat()[:19].replace(':','-')
+
 class CatboostProvider4ML(object):
     def __init__(self):
         time_start = datetime.datetime.now()
@@ -220,9 +223,9 @@ class CatboostProvider4ML(object):
 
 
         params = {
-            'max_depth':2,
+            'max_depth': 8,
             'eta': 1, 
-            'objective':'binary:logistic',
+            'objective':'reg:logistic',
             'n_jobs': 8,
             'eval_metric': 'logloss', 
         }
@@ -234,15 +237,15 @@ class CatboostProvider4ML(object):
         print("end learning ", datetime.datetime.now(), datetime.datetime.now()-time_start)
         time_start = datetime.datetime.now()
 
-        pickle.dump(model, open('xgb-model.pickle', 'wb'), protocol=4)
+        isolabel = isotimelabel()
+
+        pickle.dump(model, open('xgb-model-' + isolabel + '.pickle', 'wb'), protocol=4)
         gc.collect()        
 
         X_predict = pickle.load(open("test-data-features-0-0.pickle", "rb"))
         y_predict = model.predict(X_predict)
-        np.savetxt("xgb-result.csv", y_predict, delimiter="\n")
+        np.savetxt('xgb-result-' + isolabel + '.csv', y_predict, delimiter="\n")
         pass
-
-
 
     def train_catboost(self):
         # self.ct = bcolz.open(datadir, mode='r')
@@ -358,9 +361,10 @@ if __name__ == '__main__':
     # cp.csv2csrall('train',4,1)
     # cp.csv2csrall('train',4,3)
     #cp.csv2csrall('test-data',0)
-    #cp.train_xgb()
+    cp.train_xgb()
     # cp.train_catboost()
-    cp.report_catboost()
+    # cp.report_catboost()
+    #cp.report_xgboost()
     #cp.train()
     # cp.train()
     pass
