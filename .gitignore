@@ -1,0 +1,7 @@
+*.pickle
+*.*~
+*.gz
+*.csv
+*.bcolz
+*.npy
+cg_Sets 
