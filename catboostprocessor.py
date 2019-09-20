@@ -98,6 +98,8 @@ class CatboostProvider4ML(object):
 
         self.num_feature_names = ["timestamp", "C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9", "l1", "l2", "C11", "C12"]
         
+        self.hostname = socket.gethostname()
+
         return        
 
 
@@ -202,42 +204,61 @@ class CatboostProvider4ML(object):
         print("xgb training start", datetime.datetime.now(), datetime.datetime.now()-time_start)
         time_start = datetime.datetime.now()
 
-        y_train = pickle.load(open("train-label-2-0.pickle", "rb"))
-        y_test1 = pickle.load(open("train-label-4-1.pickle", "rb"))
-        y_test2 = pickle.load(open("train-label-4-3.pickle", "rb"))
+        X_train = None
+        y_train = None
+        X_test1 = None
+        y_test1 = None
+        X_test2 = None
+        y_test2 = None
+        if self.hostname.endswith('desktop'):
+            y_train = pickle.load(open("train-label-4-3.pickle", "rb"))
+            y_test1 = pickle.load(open("train-label-4-1.pickle", "rb"))
+            X_train = pickle.load(open("train-features-4-3.pickle", "rb"))
+            X_test1 = pickle.load(open("train-features-4-1.pickle", "rb"))
+        else:
+            y_train = pickle.load(open("train-label-2-0.pickle", "rb"))
+            y_test1 = pickle.load(open("train-label-4-1.pickle", "rb"))
+            y_test2 = pickle.load(open("train-label-4-3.pickle", "rb"))
+
+            X_train = pickle.load(open("train-features-2-0.pickle", "rb"))
+            X_test1 = pickle.load(open("train-features-4-1.pickle", "rb"))
+            X_test2 = pickle.load(open("train-features-4-3.pickle", "rb"))
+
         gc.collect()
-
-        print("labels loaded", datetime.datetime.now(), datetime.datetime.now()-time_start)
-        time_start = datetime.datetime.now()
-
-        X_train = pickle.load(open("train-features-2-0.pickle", "rb"))
-        X_test1 = pickle.load(open("train-features-4-1.pickle", "rb"))
-        X_test2 = pickle.load(open("train-features-4-3.pickle", "rb"))
-        gc.collect()
-
-        print("CSR loaded", datetime.datetime.now(), datetime.datetime.now()-time_start)
+        print("Data loaded", datetime.datetime.now(), datetime.datetime.now()-time_start)
         time_start = datetime.datetime.now()
 
         print("start learning ", datetime.datetime.now(), datetime.datetime.now()-time_start)
         time_start = datetime.datetime.now()
 
-
         params = {
-            'max_depth': 8,
+            'max_depth': 6,
             'eta': 1, 
             'objective':'reg:logistic',
-            'n_jobs': 8,
+            #'objective':'reg:linear',
+            'n_jobs': 4,
             'eval_metric': 'logloss', 
         }
-        model = xgb.XGBClassifier(**params)
+
+        eval_set_ = [(X_train, y_train), 
+                      (X_test1, y_test1), 
+        ] 
+        if not self.hostname.endswith('desktop'):
+            eval_set_.append( (X_test2, y_test2) )
+
+        print('p_train=', sum(y_train)*1.0/len(y_train))
+        print('p_test1=', sum(y_test1)*1.0/len(y_test1))
+
+        model = xgb.XGBRegressor(**params)
         model.fit(X_train, y_train, 
-            eval_set=[(X_train, y_train), (X_test1, y_test1), (X_test2, y_test2)], 
+            eval_set=eval_set_, 
             verbose=True)
 
         print("end learning ", datetime.datetime.now(), datetime.datetime.now()-time_start)
         time_start = datetime.datetime.now()
 
         isolabel = isotimelabel()
+        gc.collect()        
 
         pickle.dump(model, open('xgb-model-' + isolabel + '.pickle', 'wb'), protocol=4)
         gc.collect()        
