@@ -23,10 +23,13 @@ import datetime
 import multiprocessing
 # import numpy.lib.recfunctions as nprec
 from sklearn.metrics import r2_score
+from sklearn.metrics import log_loss
 from scipy.sparse import csr_matrix
 import pathlib
 import time
 import copy
+
+
 
 # from sklearn.dummy import DummyRegressor
 # from catboost import Pool, CatBoostRegressor
@@ -34,6 +37,9 @@ import pathlib
 # import catboost
 
 DATA_DIR= '../../data/'  
+
+def isotimelabel():
+    return datetime.datetime.now().isoformat()[:19].replace(':','-')
 
 class CatboostProvider4ML(object):
     def __init__(self):
@@ -59,6 +65,11 @@ class CatboostProvider4ML(object):
         self.cg1_nz = 1197444563
         self.cg2_nz = 27153927
         self.cg3_nz = 40854355
+
+        self.cg1_nz_test = 51384037
+        self.cg2_nz_test = 1227403
+        self.cg3_nz_test = 2377433
+        self.rows_num_test = 1317220
 
         self.cg1_id2idx = {}
         for i, cg_ in enumerate(self.cg1_list):
@@ -96,6 +107,9 @@ class CatboostProvider4ML(object):
         time_start = datetime.datetime.now()
 
         all_nonzeros = (self.cg1_nz + self.cg2_nz + self.cg3_nz + self.rows_num*len(self.num_feature_names)) 
+        if 'test' in dsname:
+            all_nonzeros = (self.cg1_nz_test + self.cg2_nz_test + self.cg3_nz_test + self.rows_num_test*len(self.num_feature_names)) 
+
         data_ = np.zeros(all_nonzeros, dtype='f4')
         rows_ = np.zeros(all_nonzeros, dtype='i4')
         cols_ = np.zeros(all_nonzeros, dtype='i4')
@@ -113,30 +127,34 @@ class CatboostProvider4ML(object):
             reader = csv.DictReader((line.replace('\0','') for line in f), delimiter=_delim) 
             rownum_ = 0
             for rownum, row in enumerate(reader):
-                if decimator and (rownum % decimator == part):
-                    labels_.append(float(row["label"]))
+                if not decimator or (rownum % decimator == part):
+                    if "label" in row:
+                        labels_.append(float(row["label"]))
                     for j, nf in enumerate(self.num_feature_names):
-                        data_[k]=float(row[nf])    
+                        if row[nf] == '':
+                            data_[k] = np.nan    
+                        else:    
+                            data_[k]=float(row[nf])    
                         rows_[k]=rownum_
                         cols_[k]=j
                         k+=1
 
                     for s in row["CG1"].split(','):
-                        if s:
+                        if s and int(s) in self.cg1_id2idx:
                             idx_ =  self.cg1_id2idx[int(s)] + len(self.num_feature_names)
                             data_[k]=1
                             rows_[k]=rownum_
                             cols_[k]=idx_
                             k+=1
                     for s in row["CG2"].split(','):
-                        if s:
+                        if s and int(s) in self.cg2_id2idx:
                             idx_ =  self.cg2_id2idx[int(s)] + self.cg1_cols_num + len(self.num_feature_names)
                             data_[k]=1
                             rows_[k]=rownum_
                             cols_[k]=idx_
                             k+=1
                     for s in row["CG3"].split(','):
-                        if s:
+                        if s and int(s) in self.cg3_id2idx:
                             idx_ =  self.cg3_id2idx[int(s)] + self.cg1_cols_num + self.cg2_cols_num + len(self.num_feature_names)
                             data_[k]=1
                             rows_[k]=rownum_
@@ -144,9 +162,10 @@ class CatboostProvider4ML(object):
                             k+=1
                     rownum_ += 1            
         # np.save('label.npy', label)
-        label = np.array(labels_, dtype='f4')
-        pickle.dump(label, open(dsname + '-label-%d-%d.pickle' % (decimator, part), 'wb'), protocol=4)
-        del label
+        if 'test' not in dsname:
+            label = np.array(labels_, dtype='f4')
+            pickle.dump(label, open(dsname + '-label-%d-%d.pickle' % (decimator, part), 'wb'), protocol=4)
+            del label
         gc.collect()
         csrall = csr_matrix((data_[:k], (rows_[:k], cols_[:k])), dtype='f4', shape=(rownum_, self.cg1_cols_num + self.cg2_cols_num + self.cg3_cols_num + len(self.num_feature_names)))
         del data_
@@ -206,7 +225,8 @@ class CatboostProvider4ML(object):
         params = {
             'max_depth':6,
             'eta': 1, 
-            'objective':'binary:logistic',
+            'objective':'reg:logistic',
+            'n_jobs': 8,
             'eval_metric': 'logloss', 
         }
         model = xgb.XGBClassifier(**params)
@@ -217,42 +237,40 @@ class CatboostProvider4ML(object):
         print("end learning ", datetime.datetime.now(), datetime.datetime.now()-time_start)
         time_start = datetime.datetime.now()
 
-        pickle.dump(model, open('xgb-model.pickle', 'wb'), protocol=4)
+        isolabel = isotimelabel()
+
+        pickle.dump(model, open('xgb-model-' + isolabel + '.pickle', 'wb'), protocol=4)
         gc.collect()        
 
-        with open("test-data-features-0-0.pickle", "rb") as fl:
-            X_predict = pickle.load(fl)
+        X_predict = pickle.load(open("test-data-features-0-0.pickle", "rb"))
         y_predict = model.predict(X_predict)
-        np.savetxt("xgb-result.csv", y_predict, delimiter="\n")
+        np.savetxt('xgb-result-' + isolabel + '.csv', y_predict, delimiter="\n")
         pass
 
-
-
-    def train(self):
+    def train_catboost(self):
         # self.ct = bcolz.open(datadir, mode='r')
         # ct = self.ct
         time_start = datetime.datetime.now()
-        print("training start", datetime.datetime.now(), datetime.datetime.now()-time_start)
+        print("catboost training start", datetime.datetime.now(), datetime.datetime.now()-time_start)
         time_start = datetime.datetime.now()
 
-        with open("labels.pickle", "rb") as fl:
-            self.train_labels = pickle.load(fl)
+        y_train = pickle.load(open("train-label-2-0.pickle", "rb"))
+        y_test1 = pickle.load(open("train-label-4-1.pickle", "rb"))
+        y_test2 = pickle.load(open("train-label-4-3.pickle", "rb"))
         gc.collect()
 
         print("labels loaded", datetime.datetime.now(), datetime.datetime.now()-time_start)
         time_start = datetime.datetime.now()
 
-        # with open("numdata.pickle", "rb") as fl:
-        #     self.num_feature_data = pickle.load(fl)
-        # gc.collect()
-        # with open("allcsrtrain.pickle", "rb") as fl:
-        #     self.cat_feature_data = pickle.load(fl)
-
-        with open("allcsrtrain.pickle", "rb") as fl:
-            allcsrtrain = pickle.load(fl)
+        X_train = pickle.load(open("train-features-2-0.pickle", "rb"))
+        X_test1 = pickle.load(open("train-features-4-1.pickle", "rb"))
+        X_test2 = pickle.load(open("train-features-4-3.pickle", "rb"))
         gc.collect()
 
         print("CSR loaded", datetime.datetime.now(), datetime.datetime.now()-time_start)
+        time_start = datetime.datetime.now()
+
+        print("start learning ", datetime.datetime.now(), datetime.datetime.now()-time_start)
         time_start = datetime.datetime.now()
 
         self.ml_params = {
@@ -268,7 +286,7 @@ class CatboostProvider4ML(object):
             "learning_rate": 0.2,
             #"learning_rate": 0.1,
             #"iterations": 45,
-            "iterations": 800,
+            "iterations": 10,
         }
 
         time_start = datetime.datetime.now()
@@ -278,37 +296,21 @@ class CatboostProvider4ML(object):
         print("after import catboost", datetime.datetime.now(), datetime.datetime.now()-time_start)
         time_start = datetime.datetime.now()
 
-        # def get_pool(row_start, row_end):
-        #     cb = catboost.Pool(catboost.FeaturesData(num_feature_data=self.num_feature_data, #[row_start:row_end],
-        #                                 cat_feature_data=self.cat_feature_data, #[row_start:row_end],
-        #                                 num_feature_names=self.num_feature_names,
-        #                                 cat_feature_names=self.cat_feature_names),
-        #                                 self.train_labels #[row_start:row_end]
-        #                                 ) 
-        #     return cb
-
-        def get_pool(row_start, row_end):
+        def Pool(X, y):
             cols = self.num_feature_names+self.cat_feature_names
             cb = catboost.Pool(
-                    allcsrtrain,
-                    label=self.train_labels,
+                    X,
+                    label=y,
                     feature_names=cols,
-                    cat_features=list(range(len(self.num_feature_names),len(cols)))
+                    cat_features=[]
             )
-
-            # cb = catboost.Pool(catboost.FeaturesData(num_feature_data=self.num_feature_data, #[row_start:row_end],
-            #                             cat_feature_data=self.cat_feature_data, #[row_start:row_end],
-            #                             num_feature_names=self.num_feature_names,
-            #                             cat_feature_names=self.cat_feature_names),
-            #                        https://en.wikibooks.org/wiki/LaTeX/Title_Creation     self.train_labels #[row_start:row_end]
-            #                        https://en.wikibooks.org/wiki/LaTeX/Title_Creation     ) 
             return cb
 
-        cbtrain = get_pool(0, self.rows_num-1000) 
-        try:
-            pickle.dump(cbtrain, open('cbtrain-pool.pickle', 'wb'), protocol=4)
-        except Exception as ex:
-            print(ex)    
+        # cbtrain = get_pool(0, self.rows_num-1000) 
+        # try:
+        #     pickle.dump(cbtrain, open('cbtrain-pool.pickle', 'wb'), protocol=4)
+        # except Exception as ex:
+        #     print(ex)    
 
         # cbtest = get_pool(self.rows_num-1000, self.rows_num)
 
@@ -318,19 +320,37 @@ class CatboostProvider4ML(object):
 
         # eval_set_ = [cbtest]
   
-        model.fit(cbtrain,
-                    eval_set=[],
+        model.fit(Pool(X_train, y_train),
+                    eval_set=[Pool(X_train, y_train), Pool(X_test1, y_test1), Pool(X_test2, y_test2)],
                     use_best_model=True,
-                    #use_best_model=False,
                     verbose=True)
 
         print("end learning ", datetime.datetime.now(), datetime.datetime.now()-time_start)
         time_start = datetime.datetime.now()
 
-        pickle.dump(model, open('model.pickle', 'wb'), protocol=4)
+        pickle.dump(model, open('model-catboost.pickle', 'wb'), protocol=4)
         gc.collect()        
+
+    def report_catboost(self):
+        model = pickle.load(open("model-catboost.pickle", "rb"))
+        X_predict = pickle.load(open("test-data-features-0-0.pickle", "rb"))
+        # X_predict = pickle.load(open("train-features-4-1.pickle", "rb"))
+        # y = pickle.load(open("train-label-4-1.pickle", "rb"))
+        y_predict = model.predict(X_predict)
+        np.savetxt("catboost-result.csv", y_predict, delimiter="\n")
+
         pass
-    
+
+    def report_xgboost(self):
+        model = pickle.load(open("xgb-model.pickle", "rb"))
+        X_predict = pickle.load(open("test-data-features-0-0.pickle", "rb"))
+        # X_predict = pickle.load(open("train-features-4-1.pickle", "rb"))
+        # y = pickle.load(open("train-label-4-1.pickle", "rb"))
+        y_predict = model.predict(X_predict)
+        np.savetxt("xgb-result.csv", y_predict, delimiter="\n")
+
+        pass
+
                     
 if __name__ == '__main__':
     # for shop_id in [36060299, 25180299]: #  shops:
@@ -340,8 +360,11 @@ if __name__ == '__main__':
     # cp.csv2csrall('train',2,0)
     # cp.csv2csrall('train',4,1)
     # cp.csv2csrall('train',4,3)
-    # cp.csv2csrall('test-data',0)
+    #cp.csv2csrall('test-data',0)
     cp.train_xgb()
+    # cp.train_catboost()
+    # cp.report_catboost()
+    #cp.report_xgboost()
     #cp.train()
     # cp.train()
     pass
