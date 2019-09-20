@@ -234,11 +234,14 @@ class CatboostProvider4ML(object):
         params = {
             'max_depth': 6,
             'eta': 1, 
-            'objective':'reg:logistic',
+            'objective':'binary:logistic',
             #'objective':'reg:linear',
-            'n_jobs': 4,
+            'n_jobs': 8,
             'eval_metric': 'logloss', 
         }
+
+        if self.hostname.endswith('desktop'):
+            params['n_jobs'] = 4
 
         eval_set_ = [(X_train, y_train), 
                       (X_test1, y_test1), 
