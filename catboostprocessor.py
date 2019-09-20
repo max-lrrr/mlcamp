@@ -21,8 +21,7 @@ from collections import OrderedDict
 from datetime import date
 import datetime
 import multiprocessing
-import bcolz
-import numpy.lib.recfunctions as nprec
+# import numpy.lib.recfunctions as nprec
 from sklearn.metrics import r2_score
 from scipy.sparse import csr_matrix
 import pathlib
@@ -34,10 +33,10 @@ import copy
 import pathlib
 # import catboost
 
-DATA_DIR= '../../data/'
+DATA_DIR= '../../data/'  
 
 class CatboostProvider4ML(object):
-    def __init__(self, datadir):
+    def __init__(self):
         time_start = datetime.datetime.now()
 
         self.num_feature_names = []
@@ -88,142 +87,185 @@ class CatboostProvider4ML(object):
 
         self.num_feature_names = ["timestamp", "C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9", "l1", "l2", "C11", "C12"]
         
-        print("loading start", datetime.datetime.now(), datetime.datetime.now()-time_start)
-        time_start = datetime.datetime.now()
         return        
 
 
-    def csv2csr(self):
-        def generator_data_catfeatures():
-            data_ = np.ones(self.cg1_nz + self.cg2_nz + self.cg3_nz, dtype=np.bool)
-            rows_ = np.zeros(self.cg1_nz + self.cg2_nz + self.cg3_nz, dtype='i4')
-            cols_ = np.zeros(self.cg1_nz + self.cg2_nz + self.cg3_nz, dtype='i4')
-            k = 0
-            with open('train.csv', 'r') as f: 
-                reader = csv.DictReader((line.replace('\0','') for line in f), delimiter=';') 
-                for rownum, row in enumerate(reader):
+    def csv2csrall(self, dsname, decimator=None, part=0):
+        time_start = datetime.datetime.now()
+        print("start csv2csrall", decimator, part, datetime.datetime.now(), datetime.datetime.now()-time_start)
+        time_start = datetime.datetime.now()
+
+        all_nonzeros = (self.cg1_nz + self.cg2_nz + self.cg3_nz + self.rows_num*len(self.num_feature_names)) 
+        data_ = np.zeros(all_nonzeros, dtype='f4')
+        rows_ = np.zeros(all_nonzeros, dtype='i4')
+        cols_ = np.zeros(all_nonzeros, dtype='i4')
+        rownum_ = self.rows_num 
+
+        if decimator:
+            rownum_ //= decimator
+
+        labels_ = []
+        k = 0
+        with open(dsname + '.csv', 'r') as f: 
+            _delim = ';'
+            if 'test' in dsname:
+                _delim = ','
+            reader = csv.DictReader((line.replace('\0','') for line in f), delimiter=_delim) 
+            rownum_ = 0
+            for rownum, row in enumerate(reader):
+                if decimator and (rownum % decimator == part):
+                    labels_.append(float(row["label"]))
+                    for j, nf in enumerate(self.num_feature_names):
+                        data_[k]=float(row[nf])    
+                        rows_[k]=rownum_
+                        cols_[k]=j
+                        k+=1
+
                     for s in row["CG1"].split(','):
                         if s:
-                            idx_ =  self.cg1_id2idx[int(s)]
-                            rows_[k]=rownum
+                            idx_ =  self.cg1_id2idx[int(s)] + len(self.num_feature_names)
+                            data_[k]=1
+                            rows_[k]=rownum_
                             cols_[k]=idx_
                             k+=1
                     for s in row["CG2"].split(','):
                         if s:
-                            idx_ =  self.cg2_id2idx[int(s)] + self.cg1_cols_num
-                            rows_[k]=rownum
+                            idx_ =  self.cg2_id2idx[int(s)] + self.cg1_cols_num + len(self.num_feature_names)
+                            data_[k]=1
+                            rows_[k]=rownum_
                             cols_[k]=idx_
                             k+=1
                     for s in row["CG3"].split(','):
                         if s:
-                            idx_ =  self.cg3_id2idx[int(s)] + self.cg1_cols_num + self.cg2_cols_num
-                            rows_[k]=rownum
+                            idx_ =  self.cg3_id2idx[int(s)] + self.cg1_cols_num + self.cg2_cols_num + len(self.num_feature_names)
+                            data_[k]=1
+                            rows_[k]=rownum_
                             cols_[k]=idx_
                             k+=1
-
-            cg_csr = csr_matrix((data_, (rows_, cols_)), dtype=np.bool, shape=(self.rows_num, self.cg1_cols_num + self.cg2_cols_num + self.cg3_cols_num))
-            gc.collect()
-            pickle.dump(cg_csr, open('cg_csr.pickle', 'wb'), protocol=4)
-        generator_data_catfeatures()            
-        pass  
-
-    def csv2csrall(self):
-        all_nonzeros = self.cg1_nz + self.cg2_nz + self.cg3_nz + self.rows_num*len(self.num_feature_names) 
-        data_ = np.zeros(all_nonzeros, dtype='f4')
-        rows_ = np.zeros(all_nonzeros, dtype='i4')
-        cols_ = np.zeros(all_nonzeros, dtype='i4')
-        label = np.zeros(self.rows_num, dtype='f4')
-        k = 0
-        with open('train.csv', 'r') as f: 
-            reader = csv.DictReader((line.replace('\0','') for line in f), delimiter=';') 
-            for rownum, row in enumerate(reader):
-                label[rownum] = float(row["label"])
-                for j, nf in enumerate(self.num_feature_names):
-                    data_[k]=float(row[nf])    
-                    rows_[k]=rownum
-                    cols_[k]=j
-                    k+=1
-
-                for s in row["CG1"].split(','):
-                    if s:
-                        idx_ =  self.cg1_id2idx[int(s)] + len(self.num_feature_names)
-                        data_[k]=1
-                        rows_[k]=rownum
-                        cols_[k]=idx_
-                        k+=1
-                for s in row["CG2"].split(','):
-                    if s:
-                        idx_ =  self.cg2_id2idx[int(s)] + self.cg1_cols_num + len(self.num_feature_names)
-                        data_[k]=1
-                        rows_[k]=rownum
-                        cols_[k]=idx_
-                        k+=1
-                for s in row["CG3"].split(','):
-                    if s:
-                        idx_ =  self.cg3_id2idx[int(s)] + self.cg1_cols_num + self.cg2_cols_num + len(self.num_feature_names)
-                        data_[k]=1
-                        rows_[k]=rownum
-                        cols_[k]=idx_
-                        k+=1
-        np.save('label.npy', label)
+                    rownum_ += 1            
+        # np.save('label.npy', label)
+        label = np.array(labels_, dtype='f4')
+        pickle.dump(label, open(dsname + '-label-%d-%d.pickle' % (decimator, part), 'wb'), protocol=4)
         del label
         gc.collect()
-        csrall = csr_matrix((data_, (rows_, cols_)), dtype='f4', shape=(self.rows_num, self.cg1_cols_num + self.cg2_cols_num + self.cg3_cols_num + len(self.num_feature_names)))
+        csrall = csr_matrix((data_[:k], (rows_[:k], cols_[:k])), dtype='f4', shape=(rownum_, self.cg1_cols_num + self.cg2_cols_num + self.cg3_cols_num + len(self.num_feature_names)))
         del data_
         del rows_ 
         del cols_ 
         gc.collect()
-        np.save('csrtrain.npy', csrall, allow_pickle=False)
-        # pickle.dump(cg_csr, open('csrtrain.pickle', 'wb'), protocol=4)
+        # np.save('csrtrain.npy', csrall)
+        pickle.dump(csrall, open(dsname + '-features-%d-%d.pickle' % (decimator, part), 'wb'), protocol=4)
+
+        print("end csv2csrall", decimator, part, datetime.datetime.now(), datetime.datetime.now()-time_start)
         pass  
 
 
-    def csv2numpy(self):
-        def generator_data_numfeatures():
-            label = np.zeros(self.rows_num, dtype='f4')
-            numdata = np.zeros((self.rows_num, len(self.num_feature_names) ), dtype='f4')
-            with open('train.csv', 'r') as f: 
-                reader = csv.DictReader((line.replace('\0','') for line in f), delimiter=';') 
-                for rownum, row in enumerate(reader):
-                    for j, nf in enumerate(self.num_feature_names):
-                        numdata[rownum, j] = float(row[nf])    
-                    label[rownum] = float(row["label"])
-            gc.collect()
-            pickle.dump(numdata, open('numdata.pickle', 'wb'), protocol=4)
-            pickle.dump(label, open('label.pickle', 'wb'), protocol=4)
-        generator_data_numfeatures()            
-        pass  
+    # def csv2numpy(self):
+    #     def generator_data_numfeatures():
+    #         label = np.zeros(self.rows_num, dtype='f4')
+    #         numdata = np.zeros((self.rows_num, len(self.num_feature_names) ), dtype='f4')
+    #         with open('train.csv', 'r') as f: 
+    #             reader = csv.DictReader((line.replace('\0','') for line in f), delimiter=';') 
+    #             for rownum, row in enumerate(reader):
+    #                 for j, nf in enumerate(self.num_feature_names):
+    #                     numdata[rownum, j] = float(row[nf])    
+    #                 label[rownum] = float(row["label"])
+    #         gc.collect()
+    #         pickle.dump(numdata, open('numdata.pickle', 'wb'), protocol=4)
+    #         pickle.dump(label, open('label.pickle', 'wb'), protocol=4)
+    #     generator_data_numfeatures()            
+    #     pass  
+
+    def train_xgb(self):
+        import xgboost as xgb
+
+        time_start = datetime.datetime.now()
+        print("xgb training start", datetime.datetime.now(), datetime.datetime.now()-time_start)
+        time_start = datetime.datetime.now()
+
+        y_train = pickle.load(open("train-label-2-0.pickle", "rb"))
+        y_test1 = pickle.load(open("train-label-4-1.pickle", "rb"))
+        y_test2 = pickle.load(open("train-label-4-3.pickle", "rb"))
+        gc.collect()
+
+        print("labels loaded", datetime.datetime.now(), datetime.datetime.now()-time_start)
+        time_start = datetime.datetime.now()
+
+        X_train = pickle.load(open("train-features-2-0.pickle", "rb"))
+        X_test1 = pickle.load(open("train-features-4-1.pickle", "rb"))
+        X_test2 = pickle.load(open("train-features-4-3.pickle", "rb"))
+        gc.collect()
+
+        print("CSR loaded", datetime.datetime.now(), datetime.datetime.now()-time_start)
+        time_start = datetime.datetime.now()
+
+        print("start learning ", datetime.datetime.now(), datetime.datetime.now()-time_start)
+        time_start = datetime.datetime.now()
+
+
+        params = {
+            'max_depth':6,
+            'eta': 1, 
+            'objective':'binary:logistic',
+            'eval_metric': 'logloss', 
+        }
+        model = xgb.XGBClassifier(**params)
+        model.fit(X_train, y_train, 
+            eval_set=[(X_train, y_train), (X_test1, y_test1), (X_test2, y_test2)], 
+            verbose=True)
+
+        print("end learning ", datetime.datetime.now(), datetime.datetime.now()-time_start)
+        time_start = datetime.datetime.now()
+
+        pickle.dump(model, open('xgb-model.pickle', 'wb'), protocol=4)
+        gc.collect()        
+
+        with open("test-data-features-0-0.pickle", "rb") as fl:
+            X_predict = pickle.load(fl)
+        y_predict = model.predict(X_predict)
+        np.savetxt("xgb-result.csv", y_predict, delimiter="\n")
+        pass
+
 
 
     def train(self):
         # self.ct = bcolz.open(datadir, mode='r')
         # ct = self.ct
-
+        time_start = datetime.datetime.now()
+        print("training start", datetime.datetime.now(), datetime.datetime.now()-time_start)
         time_start = datetime.datetime.now()
 
         with open("labels.pickle", "rb") as fl:
             self.train_labels = pickle.load(fl)
         gc.collect()
 
-        with open("numdata.pickle", "rb") as fl:
-            self.num_feature_data = pickle.load(fl)
+        print("labels loaded", datetime.datetime.now(), datetime.datetime.now()-time_start)
+        time_start = datetime.datetime.now()
+
+        # with open("numdata.pickle", "rb") as fl:
+        #     self.num_feature_data = pickle.load(fl)
+        # gc.collect()
+        # with open("allcsrtrain.pickle", "rb") as fl:
+        #     self.cat_feature_data = pickle.load(fl)
+
+        with open("allcsrtrain.pickle", "rb") as fl:
+            allcsrtrain = pickle.load(fl)
         gc.collect()
 
-        with open("cg_csr.pickle", "rb") as fl:
-            self.cat_feature_data = pickle.load(fl)
-        gc.collect()
+        print("CSR loaded", datetime.datetime.now(), datetime.datetime.now()-time_start)
+        time_start = datetime.datetime.now()
 
         self.ml_params = {
-            "loss_function": 'RMSE',        
+            "loss_function": 'Logloss',        
             #RMSE, MAE, Quantile, LogLinQuantile, Poisson, MAPE, Lq
-            "eval_metric": "logloss",
+            "eval_metric": "Logloss",
             "random_strength": 90,
             "boosting_type": "Plain",
             "bootstrap_type": "Bernoulli",
             "od_type": 'Iter',
             "od_wait": 800,
-            "depth": 6,
-            "learning_rate": 0.1,
+            "depth": 5,
+            "learning_rate": 0.2,
             #"learning_rate": 0.1,
             #"iterations": 45,
             "iterations": 800,
@@ -236,30 +278,53 @@ class CatboostProvider4ML(object):
         print("after import catboost", datetime.datetime.now(), datetime.datetime.now()-time_start)
         time_start = datetime.datetime.now()
 
+        # def get_pool(row_start, row_end):
+        #     cb = catboost.Pool(catboost.FeaturesData(num_feature_data=self.num_feature_data, #[row_start:row_end],
+        #                                 cat_feature_data=self.cat_feature_data, #[row_start:row_end],
+        #                                 num_feature_names=self.num_feature_names,
+        #                                 cat_feature_names=self.cat_feature_names),
+        #                                 self.train_labels #[row_start:row_end]
+        #                                 ) 
+        #     return cb
+
         def get_pool(row_start, row_end):
-            cb = catboost.Pool(catboost.FeaturesData(num_feature_data=self.num_feature_data, #[row_start:row_end],
-                                        cat_feature_data=self.cat_feature_data, #[row_start:row_end],
-                                        num_feature_names=self.num_feature_names,
-                                        cat_feature_names=self.cat_feature_names),
-                                        self.train_labels #[row_start:row_end]
-                                        ) 
+            cols = self.num_feature_names+self.cat_feature_names
+            cb = catboost.Pool(
+                    allcsrtrain,
+                    label=self.train_labels,
+                    feature_names=cols,
+                    cat_features=list(range(len(self.num_feature_names),len(cols)))
+            )
+
+            # cb = catboost.Pool(catboost.FeaturesData(num_feature_data=self.num_feature_data, #[row_start:row_end],
+            #                             cat_feature_data=self.cat_feature_data, #[row_start:row_end],
+            #                             num_feature_names=self.num_feature_names,
+            #                             cat_feature_names=self.cat_feature_names),
+            #                        https://en.wikibooks.org/wiki/LaTeX/Title_Creation     self.train_labels #[row_start:row_end]
+            #                        https://en.wikibooks.org/wiki/LaTeX/Title_Creation     ) 
             return cb
 
         cbtrain = get_pool(0, self.rows_num-1000) 
-        cbtest = get_pool(self.rows_num-1000, self.rows_num)
+        try:
+            pickle.dump(cbtrain, open('cbtrain-pool.pickle', 'wb'), protocol=4)
+        except Exception as ex:
+            print(ex)    
 
-        model =  catboost.CatBoostRegressor(**self.ml_params)
+        # cbtest = get_pool(self.rows_num-1000, self.rows_num)
+
+        # model =  catboost.CatBoostRegressor(**self.ml_params)
+        model =  catboost.CatBoostClassifier(**self.ml_params)
         self.model = model
 
-        eval_set_ = [cbtest]
-
+        # eval_set_ = [cbtest]
+  
         model.fit(cbtrain,
-                    eval_set=eval_set_,
+                    eval_set=[],
                     use_best_model=True,
                     #use_best_model=False,
                     verbose=True)
 
-        print("end learning for ", week2predict, datetime.datetime.now(), datetime.datetime.now()-time_start)
+        print("end learning ", datetime.datetime.now(), datetime.datetime.now()-time_start)
         time_start = datetime.datetime.now()
 
         pickle.dump(model, open('model.pickle', 'wb'), protocol=4)
@@ -269,10 +334,15 @@ class CatboostProvider4ML(object):
                     
 if __name__ == '__main__':
     # for shop_id in [36060299, 25180299]: #  shops:
-    cp = CatboostProvider4ML('train-v4.bcolz')
+    cp = CatboostProvider4ML()
     #cp.csv2csr()
     #cp.csv2numpy()
-    cp.csv2csrall()
+    # cp.csv2csrall('train',2,0)
+    # cp.csv2csrall('train',4,1)
+    # cp.csv2csrall('train',4,3)
+    # cp.csv2csrall('test-data',0)
+    cp.train_xgb()
+    #cp.train()
     # cp.train()
     pass
 
