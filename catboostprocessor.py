@@ -25,6 +25,7 @@ import multiprocessing
 from sklearn.metrics import r2_score
 from sklearn.metrics import log_loss
 from scipy.sparse import csr_matrix
+from sklearn.model_selection import GridSearchCV
 import pathlib
 import time
 import copy
@@ -181,21 +182,75 @@ class CatboostProvider4ML(object):
         pass  
 
 
-    # def csv2numpy(self):
-    #     def generator_data_numfeatures():
-    #         label = np.zeros(self.rows_num, dtype='f4')
-    #         numdata = np.zeros((self.rows_num, len(self.num_feature_names) ), dtype='f4')
-    #         with open('train.csv', 'r') as f: 
-    #             reader = csv.DictReader((line.replace('\0','') for line in f), delimiter=';') 
-    #             for rownum, row in enumerate(reader):
-    #                 for j, nf in enumerate(self.num_feature_names):
-    #                     numdata[rownum, j] = float(row[nf])    
-    #                 label[rownum] = float(row["label"])
-    #         gc.collect()
-    #         pickle.dump(numdata, open('numdata.pickle', 'wb'), protocol=4)
-    #         pickle.dump(label, open('label.pickle', 'wb'), protocol=4)
-    #     generator_data_numfeatures()            
-    #     pass  
+    def hyper_xgb(self):
+        import xgboost as xgb
+
+        time_start = datetime.datetime.now()
+        print("hyper xgb training start", datetime.datetime.now(), datetime.datetime.now()-time_start)
+        time_start = datetime.datetime.now()
+
+        y_train = pickle.load(open("train-label-84-7.pickle", "rb"))
+        X_train = pickle.load(open("train-features-84-7.pickle", "rb"))
+
+        gc.collect()
+        print("Data loaded", datetime.datetime.now(), datetime.datetime.now()-time_start)
+        time_start = datetime.datetime.now()
+
+        print("start learning ", datetime.datetime.now(), datetime.datetime.now()-time_start)
+        time_start = datetime.datetime.now()
+
+        params = {
+            'max_depth': 6,
+            'eta': 1, 
+            'objective':'binary:logistic',
+            'n_jobs': 8,
+            'eval_metric': 'logloss', 
+        }
+
+        if self.hostname.endswith('desktop'):
+            params['n_jobs'] = 4
+
+        param_grid = [
+            {
+                'max_depth': [5, 11], 
+                # 'max_depth': [5, 6, 7, 8, 9, 10], 
+                'eta': [1], 
+                'objective':    ['binary:logistic', 'reg:logistic'],
+            },
+        ]
+
+        if '5050' in self.hostname:
+            param_grid[0]['eta'] = [0.01, 0.05, 0.1]
+
+        if '4science' in self.hostname:
+            param_grid[0]['eta'] = [0.2, 0.4, 0.5, 0.7]
+
+        # eval_set_ = [(X_train, y_train), 
+        #               (X_test1, y_test1), 
+
+        gsearch = GridSearchCV(
+                    estimator=xgb.XGBClassifier(**params),
+                    param_grid=param_grid, 
+                    # scoring='roc_auc',
+                    scoring='neg_log_loss',
+                    n_jobs=4,
+                    cv=3,
+                    verbose=90)
+
+        
+
+        gsearch.fit(X_train, y_train, verbose=True)
+
+        with open('hyperparams.log', 'a') as f:
+            isolabel = isotimelabel()
+            f.write('******* ' + isolabel + ' ****************\n')
+            f.write(gsearch.cv_results_)
+            f.write(gsearch.best_params_)
+            f.write(gsearch.best_score_)
+            f.write('***********************\n')
+        gc.collect()        
+        pass
+
 
     def train_xgb(self):
         import xgboost as xgb
@@ -232,9 +287,9 @@ class CatboostProvider4ML(object):
         time_start = datetime.datetime.now()
 
         params = {
-            'max_depth': 6,
-            'eta': 1, 
-            'objective':'binary:logistic',
+            'max_depth': 13,
+            'eta': 0.1, 
+            'objective':'reg:logistic',
             #'objective':'reg:linear',
             'n_jobs': 8,
             'eval_metric': 'logloss', 
@@ -386,6 +441,7 @@ if __name__ == '__main__':
     # cp.csv2csrall('train',4,3)
     #cp.csv2csrall('test-data',0)
     cp.train_xgb()
+    # cp.hyper_xgb()
     # cp.train_catboost()
     # cp.report_catboost()
     #cp.report_xgboost()
